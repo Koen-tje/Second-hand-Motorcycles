@@ -1,0 +1,318 @@
+
+#Installing the needed packages
+```{r}
+library(tidyverse)
+library(readxl)
+library(fastDummies)
+library(mice)
+library(texreg)
+library(GGally)
+library(dplyr)
+```
+
+#Import the dataset from excel(import it manually in the next step if this doesn#t work)
+```{r}
+motor_raw <- read_excel("~/Documents/1. Koen/2. HAN/4. 2022-2023/8. Individual project/BIKE DETAILS.xlsx")
+view(motor_raw)
+
+summary(motor_raw)#check for irregularities in the data
+#noticed that there are 435 missing values out of the 1061 values in the ex_showroom_price column
+
+```
+
+#Import the data manually
+```{r}
+motor_raw <- BIKE_DETAILS
+view(motor_raw)
+
+summary(motor_raw)#check for irregularities in the data
+#noticed that there are 435 missing values out of the 1061 values in the ex_showroom_price column
+```
+
+
+#Data cleaning
+##Creating dummies for the categorical data
+```{r}
+motor_raw <- dummy_cols(motor_raw, 
+                        select_columns = c("seller_type",
+                                           "owner"))
+head(motor_raw)
+
+#The column names for the bike owners created by the fast dummy package are not handy to use later on in the code so they have to be renamed.
+motor_raw <- rename(motor_raw, 
+                    first_owner="owner_1st owner",
+                    second_owner="owner_2nd owner",
+                    third_owner="owner_3rd owner",
+                    fourth_owner="owner_4th owner",
+                    )
+head(motor_raw) #The change was successful 
+
+#now we need to select the columns needed to go on with the code.
+motor_raw2 <- select(motor_raw, name, selling_price, year, seller_type_Dealer, seller_type_Individual, first_owner, second_owner, third_owner, fourth_owner, km_driven, ex_showroom_price )
+
+view(motor_raw2)#this dataframe has a good overview of the data and is now easier to use for future modelling however, there is still work to be done before there can actually be modeled.
+head(motor_raw2)
+#now all but the name of the motorcycle is in the correct format and thus usable.
+```
+
+##Remove the missing values from the dataset
+```{r}
+#We start by removing the missing data from the df since this data is misleading at the moment.
+motor_omit <- na.omit(motor_raw2)
+view(motor_omit) #as expected we lost 435 data rows which means that we lost almost half of the data set.
+summary(motor_omit)
+head(motor_omit)
+```
+
+###Removing other data
+```{r}
+#Due to very low means of the third owner, fourth owner and the dealer seller type I wanted to check the number of occurrences of these variables to see whether we could remove them in orde to make the dataframe more accurate.
+motor_raw %>% count(owner)
+#Eleven occurrences for 3rd owner and three for 4th owner
+```
+
+```{r}
+motor_raw %>% count(seller_type)
+#Only 6 occurrences for the Dealer.
+```
+
+#Justify removing the variables
+##Visualising the seller_type data
+```{r}
+#Visualising the dealer data
+
+ggplot((motor_raw), aes(x=seller_type)) + 
+            
+  geom_bar(size=0.5,
+           color="navy blue", 
+           fill="navy blue",
+           width=.5) +
+
+  ggtitle("Seller Type Comparison") + xlab("Seller Type") + ylab("Number of motorcycles sold") +
+  
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+  panel.background = element_blank(), axis.line = element_line(colour = "black")) #removing background and grid lines
+
+#As we can see the Dealer has barely sold any second hand motorcycles
+            
+```
+
+##Visualising the owner data
+```{r}
+ggplot((motor_raw), aes(x=owner)) + 
+            
+  geom_bar(
+           size=0.5,
+           color="navy blue", 
+           fill="navy blue",
+           width=.5) +
+
+  ggtitle("Owner Comparison") + xlab("Owner") + ylab("Number of motorcyycles sold") +
+  
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+  panel.background = element_blank(), axis.line = element_line(colour = "black")) #removing background and grid lines
+
+#Just like with the dealer, the 3rd and 4th owner barely have any data points
+
+```
+
+#Updating the data set
+```{r}
+motor_omit <- select(motor_omit, name, selling_price, year, seller_type_Individual, first_owner, second_owner, km_driven, ex_showroom_price )
+head(motor_omit)
+```
+
+#Testing for multicollinearity
+```{r}
+#If we want to make a model and create a training set it is important that the other variables don't have a correlation with each other
+cor(motor_omit[2:8]) #Multicollinearity between the first and second owner of the bikes. Makes sense since in the data frame its either one or the other that is selected. 
+
+```
+
+#Testing for non-linear correlations
+```{r}
+#using gg pairs saves a lot of time to check this
+ggpairs(motor_omit[2:8])
+#no non-linear correlations in the data. It looks as if there could be a few outliers in the data so I'll check on that later in the script.
+
+#High correlation between selling price and ex showroom price
+```
+
+#Visualise the high correlation
+```{r}
+ggplot(motor_omit, aes(x=ex_showroom_price, y=selling_price)) +
+  xlim(0,1000000) + 
+  ylim(0,1000000) +
+  geom_point(color="navy blue") +
+    ggtitle("Selling Price vs Showroom Price") + xlab("Showroom") + ylab("Selling") +
+  
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+  panel.background = element_blank(), axis.line = element_line(colour = "black")) #removing background and grid lines
+```
+
+
+#Create a model using the cleaned up data
+```{r}
+model_motor_omit <- lm(motor_omit$selling_price~year + seller_type_Individual + first_owner + km_driven + ex_showroom_price, data=motor_omit)
+summary(model_motor_omit)
+
+#An r-squared of 0,90 indicates that the model can predict the price pretty accurately. We now need to check in outliers and compare the model with the imputated missing data.
+```
+
+#Check for outliers
+```{r}
+#Using CooksD we are able to filter our any possible outliers in the data
+CooksD <- cooks.distance(model_motor_omit)
+n <- nrow(motor_omit)
+```
+
+##Store the outliers in an object
+```{r}
+Outliers <- as.numeric(names(CooksD)[(CooksD > (4/n))])
+motor_omit[Outliers,]
+#Check whether the outlier are actually outliers.
+#The outliers don't have to be removed so we can keep the old model.
+```
+
+#Now that we have created a model without the missing data it is time to fill up the missing data using mulitple imputations. By imputating the data we create realistic variations in the data and this creates a data set that would come very close to a complete data set.
+
+#Mulitple imputation using mice
+```{r}
+mc_mice <- mice(motor_raw2[,c("selling_price", "year", "seller_type_Individual", "first_owner", "second_owner", "km_driven", "ex_showroom_price")], 
+              m = 69, seed = 666)
+
+#Create a model with the imputed data
+model_mc_mice <- pool(with(mc_mice, lm(selling_price~year + seller_type_Individual + first_owner + km_driven + ex_showroom_price)))
+
+#Analyse the results
+summary(model_mc_mice)
+pool.r.squared(model_mc_mice)
+
+#The R squared is pretty high for the imputated model as well and is not very far of the first model
+```
+
+#Compare the models using texreg and decide which model could have the best fit
+```{r}
+wordreg(
+  list(model_motor_omit,model_mc_mice), 
+        file = "Bikes.doc",
+        custom.model.names = c("Omit Model","Mice Model"),
+        custom.coef.names = c("Intercept","Year","Seller Type Individual",
+                            "First Owner", "Kilometers Driven","Showroom Price"),
+        digits = 3,
+        custom.gof.names = c("R-squared","Adjusted R-Squared","Number of Observations","Number of imputed data","Number of Observations"),
+        )
+
+#Both models have a very high R squared that do not vary a lot from each other. Since the model with the imputed data has a lot more observations I decided to choose this model for the predictions.
+```
+
+#Plot the model predictions against the actual data
+```{r}
+#Finally found a piece of code that would allow me to create a model
+mc_mice_completed <- complete(mc_mice)
+
+model_mc_mice_v2 <- lm(selling_price ~ year + seller_type_Individual + first_owner + km_driven + ex_showroom_price, data = mc_mice_completed)
+
+
+#Use the predict function to get predictions for the model
+predictions <- predict(model_mc_mice_v2, newdata = mc_mice_completed)
+
+#Put the predicted data into a data frame along with the actual data
+pred_data <- data.frame(predictions = predictions, actual = mc_mice_completed$selling_price)
+
+#Create a graph to show us the results of the predcited data vs the actual data
+ggplot(data = pred_data, aes(x = actual)) +
+  geom_point(aes(y = predictions), color = "red") +
+  
+  xlim(0,1000000) + 
+  ylim(0,1000000) +  
+  
+  geom_abline(intercept = 0, slope = 1) +
+  
+  ggtitle("Price Comparison") + xlab("Predicted Selling Prices") + ylab("Actual Selling Prices") +
+  
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+  panel.background = element_blank(), axis.line = element_line(colour = "black")) #removing background and grid lines
+
+```
+
+#Prediction tool
+```{r}
+Predict_price <- data.frame(seller_type_Individual = 1#1 for yes, 0 for no
+                              , year = 2020
+                              , first_owner = 1 #1 for yes, 0 for no
+                              , second_owner = 0  #1 for yes, 0 for no
+                              , km_driven = 456200
+                              , ex_showroom_price = 87652
+                              )
+
+predict(model_mc_mice_v2, newdata = Predict_price)
+#sadly a manual tool, want to create an interactive tool
+```
+
+#Create an interactive dashboard for users
+```{r}
+#Try to create an interactive dashboard with the predictive model
+install.packages("shiny")
+library(shiny)
+
+data <- mc_mice_completed
+
+#Define Model
+model_mc_mice_v2 <- lm(selling_price ~ year + seller_type_Individual + first_owner + km_driven + ex_showroom_price, data = data)
+
+#Create the shiny app
+shinyApp(
+ui = fluidPage(
+    selectInput("year", "Year:", choices = unique(data$year)),
+    selectInput("seller_type_Individual", "Seller Type:", choices = c("Individual", "Dealer")),
+    selectInput("first_owner", "First Owner:", choices = c("Yes", "No")),
+    sliderInput("km_driven", "Kilometers Driven:", min = 0, max = 500000, value = 0),
+    sliderInput("ex_showroom_price", "Ex-Showroom Price:", min = 0, max = 1000000, value = 0),
+    textOutput("predicted_price")
+),
+  server = function(input, output) {
+    model_mc_mice_v2 <- reactive({
+        subset_data <- data %>%
+    filter(year == input$year, 
+               seller_type_Individual == input$seller_type_Individual, 
+               first_owner == input$first_owner,
+               km_driven >= input$km_driven[1] & km_driven <= input$km_driven[2],
+               ex_showroom_price >= input$ex_showroom_price[1] & ex_showroom_price <= input$ex_showroom_price[2])
+        if(nrow(subset_data) == 0){
+            return(NULL)
+        }
+        lm(selling_price ~ year + seller_type_Individual + first_owner + km_driven + ex_showroom_price, 
+               data = subset_data)
+    })
+    predicted_selling_price <- reactive({
+        if(is.null(model_mc_mice_v2())){return("N/A")}
+        new_data = data.frame(year = input$year, 
+             seller_type_Individual = input$seller_type_Individual,
+             first_owner = input$first_owner,
+             km_driven = input$km_driven,
+             ex_showroom_price = input$ex_showroom_price)
+        predict(model_mc_mice_v2(), newdata = new_data)
+    })
+    output$predicted_price <- renderText({
+        if(is.null(predicted_selling_price())){return("N/A")}
+        paste0("$", format(predicted_selling_price(), big.mark = ","))
+    })
+}
+)
+  
+
+```
+
+#Check the format of the variables
+```{r}
+str(mc_mice_completed)
+```
+  
+
+```{r}
+summary(lm(selling_price ~ year + seller_type_Individual + first_owner + km_driven + ex_showroom_price, 
+         data = subset_data))
+```
+
+
